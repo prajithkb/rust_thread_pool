@@ -190,12 +190,41 @@ mod tests {
     }
 
     #[test]
-    fn invokes_callack() {
-        // No assertions
-    }
-
-    #[test]
-    fn updates_counter() {
-        // No assertions
+    fn invokes_callack_on_panic()-> Result<(),String> {
+        let id = 1;
+        let (sender, receiver): (Sender<Task>, Receiver<Task>) = mpsc::channel();
+        let receiver: Arc<Mutex<Receiver<Task>>> = Arc::new(Mutex::new(receiver));
+        let (on_complete_sender, on_complete_receiver): (Sender<String>, Receiver<String>) =
+            mpsc::channel();
+        let c = move |_: usize, b: Result<(), String>| {
+            if b.is_ok() {
+                on_complete_sender.send("Success".to_string())
+            } else {
+                on_complete_sender.send("Failure".to_string())
+            }
+            .unwrap();
+        };
+        let on_complete: WorkerCallback = Arc::new(Mutex::new(c));
+        let active_counter = Arc::new(AtomicUsize::new(0));
+        let _worker = Worker::new(id, receiver, on_complete, active_counter.clone());
+        let task = Task::new(
+            Box::new(move || {
+                thread::sleep(Duration::from_millis(100));
+                panic!();
+            }),
+            id.to_string(),
+        );
+        sender.send(task).unwrap();
+        drop(sender);
+        // Assert that it is a safe exit
+        assert_eq!(
+            "Failure",
+            on_complete_receiver
+                .recv_timeout(Duration::from_millis(500))
+                .map_err(|_| { "Worker failed to notify on_complete" })?
+        );
+        // Assert that the active counter is reset to 0
+        assert_eq!(0, active_counter.load(Ordering::SeqCst));
+        Ok(())
     }
 }
