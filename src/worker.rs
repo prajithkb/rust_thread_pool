@@ -33,14 +33,16 @@ impl Drop for ThreadFinishHook {
         let callback = self.on_thread_complete.lock().unwrap();
         let mut result: Result<(), String> = Ok(());
         if thread::panicking() {
+            // Decrement the counter only  if it panicked to accept new connections
+            // We already decrement the count for non panic situation
+            self.active_counter.fetch_sub(1, Ordering::SeqCst);
             result = Err("Panic!".to_string());
         }
         let status = result.clone().map_or("Panicked", |_| "Safe exit");
         println!("ThreadFinishHook: [Thread status: <{}>]", &status);
         // This callback removes this Worker from the queue
         (callback)(self.id, result);
-        // Decrement the counter to accept new connections
-        self.active_counter.fetch_sub(1, Ordering::SeqCst);
+    
     }
 }
 
@@ -131,7 +133,9 @@ mod tests {
     use core::sync::atomic::AtomicUsize;
     use mpsc::Receiver;
     use std::sync::mpsc::Sender;
+    use std::sync::atomic::Ordering;
     use std::time::Duration;
+    use std::thread;
     use std::{
         sync::Arc,
         sync::{mpsc, Mutex},
@@ -154,11 +158,12 @@ mod tests {
         };
         let on_complete: WorkerCallback = Arc::new(Mutex::new(c));
         let active_counter = Arc::new(AtomicUsize::new(0));
-        let _worker = Worker::new(id, receiver, on_complete, active_counter);
+        let _worker = Worker::new(id, receiver, on_complete, active_counter.clone());
         let (test_sender, test_receiver) = mpsc::channel();
         let task = Task::new(
             Box::new(move || {
                 test_sender.send("Hi").unwrap();
+                thread::sleep(Duration::from_millis(100));
             }),
             id.to_string(),
         );
@@ -170,14 +175,17 @@ mod tests {
                 .recv_timeout(Duration::from_millis(100))
                 .map_err(|_| { "Worker failed to run" })?
         );
+        assert_eq!(1, active_counter.load(Ordering::SeqCst));
         drop(sender);
         // Assert that it is a safe exit
         assert_eq!(
             "Success",
             on_complete_receiver
-                .recv_timeout(Duration::from_millis(1000))
+                .recv_timeout(Duration::from_millis(500))
                 .map_err(|_| { "Worker failed to notify on_complete" })?
         );
+        // Assert that the active counter is reset to 0
+        assert_eq!(0, active_counter.load(Ordering::SeqCst));
         Ok(())
     }
 
