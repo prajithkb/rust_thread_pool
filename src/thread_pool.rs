@@ -1,6 +1,9 @@
-use crate::timed_execution::log_time;
 use crate::task::Task;
-use crate::{timed, worker::{Worker, WorkerCallback}};
+use crate::timed_execution::log_time;
+use crate::{
+    timed,
+    worker::{Worker, WorkerCallback},
+};
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use mpsc::{Receiver, Sender};
@@ -9,9 +12,10 @@ use std::{
     sync::{mpsc, Mutex},
 };
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ExecutionError {
     MaxNumberOfThreadsExceeded,
+    QueueError
 }
 
 /// A runnable function, declared as a type alias
@@ -105,14 +109,20 @@ impl ThreadPool {
     ///                .expect("Unable to execute task")
     ///
     /// ```
-    /// Returns the status of execution. 
+    /// Returns the status of execution.
     pub fn execute(&mut self, task: Task) -> Result<(), ExecutionError> {
         timed!("ThreadPool.execute");
         if self.number_active_workers() == self.maximum_number_of_threads {
             return Err(ExecutionError::MaxNumberOfThreadsExceeded);
         }
         let id = task.id.clone();
-        self.sender.send(task).unwrap();
+        // increment the count
+        self.number_active_workers.fetch_add(1, Ordering::SeqCst);
+        self.sender.send(task).map_err(|_| {
+            // decrement the value if we were not able to send it
+            self.number_active_workers.fetch_sub(1, Ordering::SeqCst);
+            ExecutionError::QueueError
+        })?;
         println!("Enqueued the task {}", id);
         self.check_and_recover_worker_deficit();
         Ok(())
@@ -143,5 +153,60 @@ impl ThreadPool {
                 println!("Added {} new workers", new_workers_count);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ThreadPool, ExecutionError};
+    use crate::task::Task;
+    use std::time::Duration;
+    use std::sync::{mpsc};
+    use std::thread;
+    #[test]
+    fn execute_runs_successfully() {
+        let mut thread_pool = ThreadPool::new(5);
+        let (test_sender, test_receiver) = mpsc::channel();
+        let mut tasks: Vec<i32> = Vec::new();
+        for i in 0..5 {
+            let t = test_sender.clone();
+            let task = Task::new(
+                Box::new(move || {
+                    t.send(i).unwrap();
+                    thread::sleep(Duration::from_millis(100));
+                }),
+                i.to_string(),
+            );
+            thread_pool.execute(task).unwrap();
+        }
+        for _ in 0..5 {
+            tasks.push(
+                test_receiver
+                    .recv_timeout(Duration::from_millis(100)).unwrap(),
+            );
+        }
+        tasks.sort();
+        assert_eq!(vec![0, 1, 2, 3, 4], tasks);
+    }
+
+    #[test]
+    fn execute_fails_if_max_threads_exceeded() {
+        // Single thread
+        let mut thread_pool = ThreadPool::new(1);
+        let (test_sender, _) = mpsc::channel();
+        let mut results:  Vec<Result<(),ExecutionError>>= Vec::new();
+        for i in 0..2 {
+            let t = test_sender.clone();
+            let task = Task::new(
+                Box::new(move || {
+                    t.send(i).unwrap();
+                    thread::sleep(Duration::from_millis(100));
+                }),
+                i.to_string(),
+            );
+            results.push(thread_pool.execute(task));
+        }
+        // Second thread should result in failure.
+        assert_eq!(vec![Ok(()), Err(ExecutionError::MaxNumberOfThreadsExceeded)], results);
     }
 }

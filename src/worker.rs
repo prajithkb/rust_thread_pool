@@ -112,7 +112,6 @@ fn run(
         let pending_job = receiver_inside.lock().unwrap().recv();
         match pending_job {
             Ok(task) => {
-                counter.fetch_add(1, Ordering::SeqCst);
                 println!("Worker-{}, received Job {:?}", id, task);
                 (task.runnable)();
                 counter.fetch_sub(1, Ordering::SeqCst);
@@ -157,7 +156,7 @@ mod tests {
             .unwrap();
         };
         let on_complete: WorkerCallback = Arc::new(Mutex::new(c));
-        let active_counter = Arc::new(AtomicUsize::new(0));
+        let active_counter = Arc::new(AtomicUsize::new(1));
         let _worker = Worker::new(id, receiver, on_complete, active_counter.clone());
         let (test_sender, test_receiver) = mpsc::channel();
         let task = Task::new(
@@ -205,7 +204,7 @@ mod tests {
             .unwrap();
         };
         let on_complete: WorkerCallback = Arc::new(Mutex::new(c));
-        let active_counter = Arc::new(AtomicUsize::new(0));
+        let active_counter = Arc::new(AtomicUsize::new(1));
         let _worker = Worker::new(id, receiver, on_complete, active_counter.clone());
         let task = Task::new(
             Box::new(move || {
