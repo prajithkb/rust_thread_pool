@@ -36,7 +36,7 @@ impl ThreadPool {
     ///     This number cannot be more than 50
     ///
     /// ## Examples
-    /// ```
+    /// ```ignore
     /// let thread_pool = ThreadPool::new(10)
     /// ```
     /// [Runnable]: ./ThreadPool.html#type.Runnable  
@@ -100,12 +100,12 @@ impl ThreadPool {
     /// * `task` - The Task to execute
     ///
     /// ## Examples
-    /// ```
+    /// ```ignore
     /// let result = thread_pool.execute(Task::new())
-    ///                 .expect("Unable to execute task")
+    ///                .expect("Unable to execute task")
     ///
     /// ```
-    /// Returns
+    /// Returns the status of execution. 
     pub fn execute(&mut self, task: Task) -> Result<(), ExecutionError> {
         timed!("ThreadPool.execute");
         if self.number_active_workers() == self.maximum_number_of_threads {

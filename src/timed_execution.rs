@@ -22,3 +22,14 @@ impl<'a> Drop for LogTime<'a> {
         println!("Duration: [{}] ({:?} us)", self.function, self.start.elapsed().as_micros());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    
+    use crate::timed_execution::log_time;
+    #[test]
+fn measures_duration() {
+        timed!("test");
+        // No assertions
+    }
+}
