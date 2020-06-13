@@ -1,5 +1,5 @@
 use crate::timed_execution::log_time;
-use crate::{task::Task, thread_pool::Runnable};
+use crate::{task::Task, thread_pool::Runnable, timed};
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use mpsc::Receiver;
@@ -25,6 +25,7 @@ pub struct Worker {
 struct PanicHook {
     id: usize,
     pub on_thread_complete: WorkerCallback,
+    active_counter: Arc<AtomicUsize>
 }
 
 impl Drop for PanicHook {
@@ -36,7 +37,10 @@ impl Drop for PanicHook {
         }
         let status = result.clone().map_or("Panic", |_| "Safe exit");
         println!("PanicHook: Thread status {}", &status);
+        // This callback removes this Worker from the queue
         (callback)(self.id, result);
+        // Decrement the counter to accept new connections
+        self.active_counter.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -63,7 +67,7 @@ impl Worker {
         on_complete: WorkerCallback,
         active_counter: Arc<AtomicUsize>,
     ) -> Worker {
-        let _log_time = log_time("Worker.new");
+        timed!("Worker.new");
         println!("Creating a new worker with id {}", id);
         let receiver_inside = receiver.clone();
         let thread = thread::spawn(move || {
@@ -72,6 +76,7 @@ impl Worker {
             let _panic_hook = PanicHook {
                 id,
                 on_thread_complete: on_complete,
+                active_counter: active_counter.clone()
             };
             let _log_time = log_time("Thread.run"); 
             run(id, receiver_inside, active_counter)();
@@ -96,7 +101,7 @@ fn run(
     receiver: Arc<Mutex<Receiver<Task>>>,
     active_counter: Arc<AtomicUsize>,
 ) -> Runnable {
-    let _log_time = log_time("Worker.run");
+    timed!("Worker.run");
     let receiver_inside = receiver.clone();
     let counter = active_counter.clone();
     Box::new(move || loop {
@@ -104,9 +109,8 @@ fn run(
         let job = receiver_inside.lock().unwrap().recv().unwrap();
         counter.fetch_add(1, Ordering::SeqCst);
         println!("Worker-{}, received Job {:?}", id, job);
-        counter.fetch_sub(1, Ordering::SeqCst);
         (job.runnable)();
-       
+        counter.fetch_sub(1, Ordering::SeqCst);
     })
 }
 

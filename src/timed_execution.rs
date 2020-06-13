@@ -1,5 +1,11 @@
 use std::time::Instant;
 
+#[macro_export]
+macro_rules! timed {
+    ($function_name:expr) => {
+        let _log_time = log_time($function_name);
+    };
+}
 
 pub fn log_time<'a>(function: &'static str) -> LogTime {
     // println!("--start--> {}", function);

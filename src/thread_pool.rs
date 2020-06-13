@@ -1,6 +1,6 @@
 use crate::timed_execution::log_time;
 use crate::task::Task;
-use crate::worker::{Worker, WorkerCallback};
+use crate::{timed, worker::{Worker, WorkerCallback}};
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use mpsc::{Receiver, Sender};
@@ -41,7 +41,7 @@ impl ThreadPool {
     /// ```
     /// [Runnable]: ./ThreadPool.html#type.Runnable  
     pub fn new(maximum_number_of_threads: usize) -> ThreadPool {
-        let _log_time = log_time("ThreadPool.new");
+        timed!("ThreadPool.new");
         assert!(maximum_number_of_threads > 0 && maximum_number_of_threads < 50);
         let number_active_workers = Arc::new(AtomicUsize::new(0));
         let (sender, r): (Sender<Task>, Receiver<Task>) = mpsc::channel();
@@ -107,7 +107,7 @@ impl ThreadPool {
     /// ```
     /// Returns
     pub fn execute(&mut self, task: Task) -> Result<(), ExecutionError> {
-        let _log_time = log_time("ThreadPool.execute");
+        timed!("ThreadPool.execute");
         if self.number_active_workers() == self.maximum_number_of_threads {
             return Err(ExecutionError::MaxNumberOfThreadsExceeded);
         }
@@ -120,7 +120,7 @@ impl ThreadPool {
 
     /// Checks for deficit in the number of workers and adds new workers to cover the deficit
     fn check_and_recover_worker_deficit(&self) {
-        let _log_time = log_time("ThreadPool.check_and_recover_worker_deficit");
+        timed!("ThreadPool.check_and_recover_worker_deficit");
         let mut workers = self.workers.lock().unwrap();
         let mut deficit = self.maximum_number_of_threads - workers.len();
         if deficit > 0 {
