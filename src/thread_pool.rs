@@ -1,7 +1,6 @@
+use core::sync::atomic::AtomicBool;
 use crate::task::Task;
-use crate::timed_execution::log_time;
 use crate::{
-    timed,
     worker::{Worker, WorkerCallback},
 };
 use core::sync::atomic::AtomicUsize;
@@ -36,6 +35,8 @@ pub struct ThreadPool {
     maximum_number_of_threads: usize,
     task_queue: Arc<Mutex<Receiver<Task>>>,
     worker_callback: WorkerCallback,
+    pending_tasks: Arc<AtomicUsize>,
+    shutdown_initiated: Arc<AtomicBool>
 }
 
 impl ThreadPool {
@@ -54,16 +55,23 @@ impl ThreadPool {
         timed!("ThreadPool.new");
         assert!(maximum_number_of_threads > 0 && maximum_number_of_threads < 50);
         let number_active_workers = Arc::new(AtomicUsize::new(0));
+        let pending_tasks = Arc::new(AtomicUsize::new(0));
         let (sender, r): (Sender<Task>, Receiver<Task>) = mpsc::channel();
         let task_queue: Arc<Mutex<Receiver<Task>>> = Arc::new(Mutex::new(r));
+        let c = Arc::new(AtomicBool::new(false));
+        let b = c.clone();
         let workers: Arc<Mutex<Vec<Worker>>> =
             Arc::new(Mutex::new(Vec::with_capacity(maximum_number_of_threads)));
         let workers_for_callback = workers.clone();
         let w: WorkerCallback = Arc::new(Mutex::new(move |id, result: Result<(), String>| {
-            println!("Removing worker, status [{:?}]", result);
-            let mut w = workers_for_callback.lock().unwrap();
-            w.remove(id);
-            println!("Number of workers {}", w.len());
+            if !b.load(Ordering::SeqCst) {
+                println!("Removing worker, status [{:?}]", result);
+                let mut w = workers_for_callback.lock().unwrap();
+                w.remove(id);
+                println!("Number of workers {}", w.len());
+            } else {
+                println!("Shutdown initiated, nothing to do for Worker {}", id);
+            }
         }));
         for id in 0..maximum_number_of_threads {
             let remove_item: WorkerCallback = w.clone();
@@ -72,6 +80,8 @@ impl ThreadPool {
                 task_queue.clone(),
                 remove_item,
                 number_active_workers.clone(),
+                pending_tasks.clone()
+
             );
             workers.lock().unwrap().push(worker);
         }
@@ -82,15 +92,18 @@ impl ThreadPool {
             maximum_number_of_threads,
             task_queue,
             worker_callback: w,
+            pending_tasks,
+            shutdown_initiated: c
         };
         thread_pool
     }
 
-    /// initiates a shuts down the Thread pool
+    /// Initiates a shuts down the Thread pool
     /// All the Workers are notified. This does not stop any ongoing tasks.
     /// Potential memory leak, we need to drop the channel
     /// TODO: Implement shutdown_immediately()?
-    pub fn init_shutdown(&self) {
+    fn init_shutdown(&self) {
+        self.shutdown_initiated.store(true, Ordering::SeqCst);
         let mut c = self.sender.borrow_mut();
         if c.is_none() {
             println!("Threadpool shut down already");
@@ -98,8 +111,33 @@ impl ThreadPool {
             println!("Threadpool shutting down");
             // let mut b = *c;
             let sender = std::mem::replace(&mut *c, Box::new(None));
-            drop(sender);
+            let c =*sender;
+            let b = c.unwrap();
+            drop(b);
         }
+    }
+
+    /// Waits for the shutdown. 
+    /// It is essentially waiting for the worker threads to complete
+    /// This call blocks until all workers are complete
+    pub fn wait_for_shutdown(self) {
+        &self.init_shutdown();
+        let w = self.workers;
+        let mut d = w.lock();
+        let a = d.as_mut().unwrap();
+        let b =  &mut **a;
+        while b.len() > 0 {
+            let f = b.pop();
+            if let Some(worker) = f {
+                println!("Worker {} shutting down", worker.id);
+                worker.shutdown();
+            }
+        }
+        println!("Shutting down complete");
+    }
+
+    pub fn get_pending_tasks(&self) -> usize {
+        self.pending_tasks.load(Ordering::SeqCst)
     }
 
     /// Returns the number of active workers.
@@ -137,6 +175,7 @@ impl ThreadPool {
         if fail_fast && self.number_active_workers() == self.maximum_number_of_threads {
             return Err(ExecutionError::NoThreadAvailable);
         }
+        self.pending_tasks.fetch_add(1, Ordering::SeqCst);
         let id = task.id.clone();
         // increment the count
         self.number_active_workers.fetch_add(1, Ordering::SeqCst);
@@ -169,6 +208,7 @@ impl ThreadPool {
                     self.task_queue.clone(),
                     self.worker_callback.clone(),
                     self.number_active_workers.clone(),
+                    self.pending_tasks.clone()
                 ));
                 deficit -= 1;
             }
@@ -236,7 +276,6 @@ mod tests {
 
     #[test]
     fn execute_blocks_without_fail_fast() {
-        // Single thread
         let thread_pool = ThreadPool::new(1);
         let mut results: Vec<Result<(), ExecutionError>> = Vec::new();
         let mut outputs: Vec<i32> = Vec::new();
@@ -272,9 +311,8 @@ mod tests {
     }
 
     #[test]
-    fn shutdown_stops_execution() {
-        // Single thread
-        let thread_pool = &ThreadPool::new(4);
+    fn init_shutdown_stops_workers() {
+        let thread_pool = ThreadPool::new(4);
         let mut results: Vec<Result<(), ExecutionError>> = Vec::new();
         let (tx, rx) = mpsc::channel();
         for i in 0..6 {
@@ -310,6 +348,53 @@ mod tests {
                 Ok(()),
                 Ok(()),
                 Err(ExecutionError::Shutdown)
+            ],
+            results
+        );
+        // Validate the sent results
+        assert_eq!(vec![
+            Some(0),
+            Some(1),
+            Some(2),
+            Some(3),
+        ], outputs);
+    }
+
+    #[test]
+    fn shutdown_stops_execution() {
+        let thread_pool = ThreadPool::new(2);
+        let mut results: Vec<Result<(), ExecutionError>> = Vec::new();
+        let (tx, rx) = mpsc::channel();
+        for i in 0..6 {
+            let t = tx.clone();
+            let task = Task::new(
+                Box::new(move || {
+                    thread::sleep(Duration::from_millis(100));
+                    t.send(i).unwrap();
+                }),
+                i.to_string(),
+            );
+            results.push(thread_pool.execute(task, false));
+        }
+        thread_pool.wait_for_shutdown();
+
+        let mut outputs= vec![
+            rx.recv().ok(),
+            rx.recv().ok(),
+            rx.recv().ok(),
+            rx.recv().ok()
+        ];
+        outputs.sort();
+        drop(rx);
+        // Validate the thread execution results
+        assert_eq!(
+            vec![
+                Ok(()),
+                Ok(()),
+                Ok(()),
+                Ok(()),
+                Ok(()),
+                Ok(())
             ],
             results
         );

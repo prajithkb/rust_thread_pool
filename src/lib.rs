@@ -13,11 +13,13 @@
 //! }));
 //! // fails since there are no threads available to execute this task
 //! assert_eq!(Err((ExecutionError::NoThreadAvailable)), second_task_execution)
+//! 
+//! // Shutting down
+//! thread_pool.await_shutdown(); // This will block until all the workers are closed.
 //! ```
 //! 
 #[macro_use]
-extern crate lazy_static;
+extern crate timed;
 pub mod task;
 pub mod thread_pool;
-mod timed_execution;
 mod worker;

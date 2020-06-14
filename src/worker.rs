@@ -1,5 +1,4 @@
-use crate::timed_execution::log_time;
-use crate::{task::Task, thread_pool::Runnable, timed};
+use crate::{task::Task, thread_pool::Runnable};
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use mpsc::Receiver;
@@ -67,6 +66,7 @@ impl Worker {
         receiver: Arc<Mutex<Receiver<Task>>>,
         on_complete: WorkerCallback,
         active_counter: Arc<AtomicUsize>,
+        pending_tasks: Arc<AtomicUsize>
     ) -> Worker {
         timed!("Worker.new");
         println!("Creating a new worker with id {}", id);
@@ -81,8 +81,8 @@ impl Worker {
                     on_thread_complete: on_complete,
                     active_counter: active_counter.clone(),
                 };
-                let _log_time = log_time("Thread.run");
-                run(id, receiver_inside, active_counter)();
+                timed!("Thread.run");
+                run(id, receiver_inside, active_counter, pending_tasks)();
             }).unwrap();
 
         Worker {
@@ -90,6 +90,10 @@ impl Worker {
             thread,
             receiver,
         }
+    }
+
+    pub (crate) fn shutdown(self) {
+        self.thread.join().unwrap();
     }
     
  }
@@ -104,21 +108,27 @@ fn run(
     id: usize,
     receiver: Arc<Mutex<Receiver<Task>>>,
     active_counter: Arc<AtomicUsize>,
+    pending_tasks: Arc<AtomicUsize>,
 ) -> Runnable {
     timed!("Worker.run");
     let receiver_inside = receiver.clone();
     let counter = active_counter.clone();
+    let p = pending_tasks.clone();
     Box::new(move || loop {
         println!("Worker-{}, Waiting...", id);
         let pending_job = receiver_inside.lock().unwrap().recv();
         match pending_job {
             Ok(task) => {
-                println!("Worker-{}, received Job {:?}", id, task);
+                let task_id = task.id;
+                println!("Worker-{}, received Job {}", id, task_id);
                 (task.runnable)();
+                println!("Worker-{}, finished Job {}", id, task_id);
                 counter.fetch_sub(1, Ordering::SeqCst);
+                // Need to make this atomic with the one above TODO
+                p.fetch_sub(1, Ordering::SeqCst);
             }
-            Err(e) => {
-                println!("Worker-{}, Error: {}", id, e.to_string());
+            Err(_) => {
+                println!("Worker-{}, Channel closed", id);
                 break;
             }
         }
@@ -158,7 +168,8 @@ mod tests {
         };
         let on_complete: WorkerCallback = Arc::new(Mutex::new(c));
         let active_counter = Arc::new(AtomicUsize::new(1));
-        let _worker = Worker::new(id, receiver, on_complete, active_counter.clone());
+        let pending_tasks = Arc::new(AtomicUsize::new(1));
+        let _worker = Worker::new(id, receiver, on_complete, active_counter.clone(), pending_tasks);
         let (test_sender, test_receiver) = mpsc::channel();
         let task = Task::new(
             Box::new(move || {
@@ -206,7 +217,8 @@ mod tests {
         };
         let on_complete: WorkerCallback = Arc::new(Mutex::new(c));
         let active_counter = Arc::new(AtomicUsize::new(1));
-        let _worker = Worker::new(id, receiver, on_complete, active_counter.clone());
+        let pending_tasks = Arc::new(AtomicUsize::new(1));
+        let _worker = Worker::new(id, receiver, on_complete, active_counter.clone(), pending_tasks);
         let task = Task::new(
             Box::new(move || {
                 thread::sleep(Duration::from_millis(100));
