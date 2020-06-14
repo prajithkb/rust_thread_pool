@@ -126,7 +126,7 @@ impl ThreadPool {
                 worker.shutdown();
             }
         }
-        println!("Shutting down complete");
+        println!("Shut down complete");
     }
 
     pub fn get_pending_tasks(&self) -> usize {
