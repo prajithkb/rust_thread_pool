@@ -105,16 +105,9 @@ impl ThreadPool {
     fn init_shutdown(&self) {
         self.shutdown_initiated.store(true, Ordering::SeqCst);
         let mut c = self.sender.borrow_mut();
-        if c.is_none() {
-            println!("Threadpool shut down already");
-        } else {
-            println!("Threadpool shutting down");
-            // let mut b = *c;
-            let sender = std::mem::replace(&mut *c, Box::new(None));
-            let c =*sender;
-            let b = c.unwrap();
-            drop(b);
-        }
+        println!("Threadpool shutting down");
+        let sender = std::mem::replace(&mut *c, Box::new(None));
+        drop(sender);
     }
 
     /// Waits for the shutdown. 
