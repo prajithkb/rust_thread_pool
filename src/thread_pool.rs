@@ -12,10 +12,13 @@ use std::{
     sync::{mpsc, Mutex},
 };
 
+/// Defines the error states returned by `thread_pool.execute`
 #[derive(Debug, PartialEq)]
 pub enum ExecutionError {
-    MaxNumberOfThreadsExceeded,
-    QueueError
+    /// No threads are available to perform this task
+    NoThreadAvailable,
+    /// The internal channel for submitting the tasks failed
+    TaskChannelError
 }
 
 /// A runnable function, declared as a type alias
@@ -109,11 +112,12 @@ impl ThreadPool {
     ///                .expect("Unable to execute task")
     ///
     /// ```
-    /// Returns the status of execution.
+    /// Returns the status of execution. At present it fails fast if no threads are available to perform.thread_pool
+    /// TODO: add a method to accept the task and keep it in a queue.
     pub fn execute(&mut self, task: Task) -> Result<(), ExecutionError> {
         timed!("ThreadPool.execute");
         if self.number_active_workers() == self.maximum_number_of_threads {
-            return Err(ExecutionError::MaxNumberOfThreadsExceeded);
+            return Err(ExecutionError::NoThreadAvailable);
         }
         let id = task.id.clone();
         // increment the count
@@ -121,7 +125,7 @@ impl ThreadPool {
         self.sender.send(task).map_err(|_| {
             // decrement the value if we were not able to send it
             self.number_active_workers.fetch_sub(1, Ordering::SeqCst);
-            ExecutionError::QueueError
+            ExecutionError::TaskChannelError
         })?;
         println!("Enqueued the task {}", id);
         self.check_and_recover_worker_deficit();
@@ -193,13 +197,10 @@ mod tests {
     fn execute_fails_if_max_threads_exceeded() {
         // Single thread
         let mut thread_pool = ThreadPool::new(1);
-        let (test_sender, _) = mpsc::channel();
         let mut results:  Vec<Result<(),ExecutionError>>= Vec::new();
         for i in 0..2 {
-            let t = test_sender.clone();
             let task = Task::new(
                 Box::new(move || {
-                    t.send(i).unwrap();
                     thread::sleep(Duration::from_millis(100));
                 }),
                 i.to_string(),
@@ -207,6 +208,6 @@ mod tests {
             results.push(thread_pool.execute(task));
         }
         // Second thread should result in failure.
-        assert_eq!(vec![Ok(()), Err(ExecutionError::MaxNumberOfThreadsExceeded)], results);
+        assert_eq!(vec![Ok(()), Err(ExecutionError::NoThreadAvailable)], results);
     }
 }
