@@ -91,7 +91,8 @@ impl Worker {
             receiver,
         }
     }
-}
+    
+ }
 
 /// The main Worker loop.
 ///
@@ -117,7 +118,7 @@ fn run(
                 counter.fetch_sub(1, Ordering::SeqCst);
             }
             Err(e) => {
-                print!("Worker-{}, Error: {}", id, e.to_string());
+                println!("Worker-{}, Error: {}", id, e.to_string());
                 break;
             }
         }
