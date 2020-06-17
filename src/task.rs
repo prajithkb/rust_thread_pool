@@ -17,11 +17,6 @@ impl Debug for Task {
 
 impl Task {
     pub fn new(runnable: Runnable, id: String) -> Task {
-        Task {
-            runnable,
-            id,
-        }
+        Task { runnable, id }
     }
 }
-
-

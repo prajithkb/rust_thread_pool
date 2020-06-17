@@ -1,17 +1,15 @@
-use core::sync::atomic::AtomicBool;
 use crate::task::Task;
-use crate::{
-    worker::{Worker, WorkerCallback},
-};
+use crate::worker::{Worker, WorkerCallback};
+use core::sync::atomic::AtomicBool;
 use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::Ordering;
 use mpsc::{Receiver, Sender};
+
 use std::{
     cell::RefCell,
     sync::Arc,
     sync::{mpsc, Mutex},
 };
-
 /// Defines the error states returned by `thread_pool.execute`
 #[derive(Debug, PartialEq)]
 pub enum ExecutionError {
@@ -36,7 +34,7 @@ pub struct ThreadPool {
     task_queue: Arc<Mutex<Receiver<Task>>>,
     worker_callback: WorkerCallback,
     pending_tasks: Arc<AtomicUsize>,
-    shutdown_initiated: Arc<AtomicBool>
+    shutdown_initiated: Arc<AtomicBool>,
 }
 
 impl ThreadPool {
@@ -65,12 +63,14 @@ impl ThreadPool {
         let workers_for_callback = workers.clone();
         let w: WorkerCallback = Arc::new(Mutex::new(move |id, result: Result<(), String>| {
             if !b.load(Ordering::SeqCst) {
-                println!("Removing worker, status [{:?}]", result);
+                guarded_println!("Removing worker, status [{:?}]", result);
+                // Only lock jobs for the time it takes
+                // to get a job, not run it.
                 let mut w = workers_for_callback.lock().unwrap();
                 w.remove(id);
-                println!("Number of workers {}", w.len());
+                guarded_println!("Number of workers {}", w.len());
             } else {
-                println!("Shutdown initiated, nothing to do for Worker {}", id);
+                guarded_println!("Shutdown initiated, nothing to do for Worker {}", id);
             }
         }));
         for id in 0..maximum_number_of_threads {
@@ -80,8 +80,7 @@ impl ThreadPool {
                 task_queue.clone(),
                 remove_item,
                 number_active_workers.clone(),
-                pending_tasks.clone()
-
+                pending_tasks.clone(),
             );
             workers.lock().unwrap().push(worker);
         }
@@ -93,7 +92,7 @@ impl ThreadPool {
             task_queue,
             worker_callback: w,
             pending_tasks,
-            shutdown_initiated: c
+            shutdown_initiated: c,
         };
         thread_pool
     }
@@ -105,12 +104,12 @@ impl ThreadPool {
     fn init_shutdown(&self) {
         self.shutdown_initiated.store(true, Ordering::SeqCst);
         let mut c = self.sender.borrow_mut();
-        println!("Threadpool shutting down");
+        guarded_println!("Threadpool shutting down");
         let sender = std::mem::replace(&mut *c, Box::new(None));
         drop(sender);
     }
 
-    /// Waits for the shutdown. 
+    /// Waits for the shutdown.
     /// It is essentially waiting for the worker threads to complete
     /// This call blocks until all workers are complete
     pub fn wait_for_shutdown(self) {
@@ -118,15 +117,15 @@ impl ThreadPool {
         let w = self.workers;
         let mut d = w.lock();
         let a = d.as_mut().unwrap();
-        let b =  &mut **a;
+        let b = &mut **a;
         while b.len() > 0 {
             let f = b.pop();
             if let Some(worker) = f {
-                println!("Worker {} shutting down", worker.id);
+                guarded_println!("Worker {} shutting down", worker.id);
                 worker.shutdown();
             }
         }
-        println!("Shut down complete");
+        guarded_println!("Shut down complete");
     }
 
     pub fn get_pending_tasks(&self) -> usize {
@@ -160,7 +159,8 @@ impl ThreadPool {
     /// Returns the status of execution. At present it fails fast if no threads are available to perform.thread_pool
     /// TODO: add a method to accept the task and keep it in a queue.
     pub fn execute(&self, task: Task, fail_fast: bool) -> Result<(), ExecutionError> {
-        timed!("ThreadPool.execute");
+        let name = format!("ThreadPool-{}.execute", task.id);
+        timed!(&name);
         let sender_reference = self.sender.borrow();
         if sender_reference.is_none() {
             return Err(ExecutionError::Shutdown);
@@ -178,7 +178,7 @@ impl ThreadPool {
             self.number_active_workers.fetch_sub(1, Ordering::SeqCst);
             ExecutionError::TaskChannelError
         })?;
-        println!("Enqueued the task {}", id);
+        guarded_println!("Enqueued the task {}", id);
         self.check_and_recover_worker_deficit();
         Ok(())
     }
@@ -189,7 +189,7 @@ impl ThreadPool {
         let mut workers = self.workers.lock().unwrap();
         let mut deficit = self.maximum_number_of_threads - workers.len();
         if deficit > 0 {
-            println!(
+            guarded_println!(
                 "There is a deficit of {} workers, will add new workers",
                 deficit
             );
@@ -201,12 +201,12 @@ impl ThreadPool {
                     self.task_queue.clone(),
                     self.worker_callback.clone(),
                     self.number_active_workers.clone(),
-                    self.pending_tasks.clone()
+                    self.pending_tasks.clone(),
                 ));
                 deficit -= 1;
             }
             if new_workers_count > 0 {
-                println!("Added {} new workers", new_workers_count);
+                guarded_println!("Added {} new workers", new_workers_count);
             }
         }
     }
@@ -318,17 +318,17 @@ mod tests {
                 i.to_string(),
             );
             results.push(thread_pool.execute(task, false));
-            println!("Before shut down");
+            guarded_println!("Before shut down");
             if i == 4 {
                 thread_pool.init_shutdown();
             }
         }
 
-        let mut outputs= vec![
+        let mut outputs = vec![
             rx.recv().ok(),
             rx.recv().ok(),
             rx.recv().ok(),
-            rx.recv().ok()
+            rx.recv().ok(),
         ];
         outputs.sort();
         drop(rx);
@@ -345,12 +345,7 @@ mod tests {
             results
         );
         // Validate the sent results
-        assert_eq!(vec![
-            Some(0),
-            Some(1),
-            Some(2),
-            Some(3),
-        ], outputs);
+        assert_eq!(vec![Some(0), Some(1), Some(2), Some(3),], outputs);
     }
 
     #[test]
@@ -371,32 +366,20 @@ mod tests {
         }
         thread_pool.wait_for_shutdown();
 
-        let mut outputs= vec![
+        let mut outputs = vec![
             rx.recv().ok(),
             rx.recv().ok(),
             rx.recv().ok(),
-            rx.recv().ok()
+            rx.recv().ok(),
         ];
         outputs.sort();
         drop(rx);
         // Validate the thread execution results
         assert_eq!(
-            vec![
-                Ok(()),
-                Ok(()),
-                Ok(()),
-                Ok(()),
-                Ok(()),
-                Ok(())
-            ],
+            vec![Ok(()), Ok(()), Ok(()), Ok(()), Ok(()), Ok(())],
             results
         );
         // Validate the sent results
-        assert_eq!(vec![
-            Some(0),
-            Some(1),
-            Some(2),
-            Some(3),
-        ], outputs);
+        assert_eq!(vec![Some(0), Some(1), Some(2), Some(3),], outputs);
     }
 }

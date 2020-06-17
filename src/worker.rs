@@ -38,10 +38,9 @@ impl Drop for ThreadFinishHook {
             result = Err("Panic!".to_string());
         }
         let status = result.clone().map_or("Panicked", |_| "Safe exit");
-        println!("ThreadFinishHook: [Thread status: <{}>]", &status);
+        guarded_println!("ThreadFinishHook: [Thread status: <{}>]", &status);
         // This callback removes this Worker from the queue
         (callback)(self.id, result);
-    
     }
 }
 
@@ -66,13 +65,13 @@ impl Worker {
         receiver: Arc<Mutex<Receiver<Task>>>,
         on_complete: WorkerCallback,
         active_counter: Arc<AtomicUsize>,
-        pending_tasks: Arc<AtomicUsize>
+        pending_tasks: Arc<AtomicUsize>,
     ) -> Worker {
         timed!("Worker.new");
-        println!("Creating a new worker with id {}", id);
+        guarded_println!("Creating a new worker with id {}", id);
         let receiver_inside = receiver.clone();
         let thread = thread::Builder::new()
-            .name(format!("Worker.Thread-{}", id))
+            // .name(format!("Worker.Thread-{}", id))
             .spawn(move || {
                 // un used variable that will get dropped if this thread panics
                 // when the 'drop' happens the call back gets called
@@ -83,7 +82,8 @@ impl Worker {
                 };
                 timed!("Thread.run");
                 run(id, receiver_inside, active_counter, pending_tasks)();
-            }).unwrap();
+            })
+            .unwrap();
 
         Worker {
             id,
@@ -92,11 +92,10 @@ impl Worker {
         }
     }
 
-    pub (crate) fn shutdown(self) {
+    pub(crate) fn shutdown(self) {
         self.thread.join().unwrap();
     }
-    
- }
+}
 
 /// The main Worker loop.
 ///
@@ -115,20 +114,22 @@ fn run(
     let counter = active_counter.clone();
     let p = pending_tasks.clone();
     Box::new(move || loop {
-        println!("Worker-{}, Waiting...", id);
+        guarded_println!("Worker-{}, Waiting...", id);
+        // Only lock jobs for the time it takes
+        // to get a job, not run it.
         let pending_job = receiver_inside.lock().unwrap().recv();
         match pending_job {
             Ok(task) => {
                 let task_id = task.id;
-                println!("Worker-{}, received Job {}", id, task_id);
+                guarded_println!("Worker-{}, received Job {}", id, task_id);
                 (task.runnable)();
-                println!("Worker-{}, finished Job {}", id, task_id);
+                guarded_println!("Worker-{}, finished Job {}", id, task_id);
                 counter.fetch_sub(1, Ordering::SeqCst);
                 // Need to make this atomic with the one above TODO
                 p.fetch_sub(1, Ordering::SeqCst);
             }
             Err(_) => {
-                println!("Worker-{}, Channel closed", id);
+                guarded_println!("Worker-{}, Channel closed", id);
                 break;
             }
         }
@@ -142,10 +143,10 @@ mod tests {
     use crate::worker::WorkerCallback;
     use core::sync::atomic::AtomicUsize;
     use mpsc::Receiver;
-    use std::sync::mpsc::Sender;
     use std::sync::atomic::Ordering;
-    use std::time::Duration;
+    use std::sync::mpsc::Sender;
     use std::thread;
+    use std::time::Duration;
     use std::{
         sync::Arc,
         sync::{mpsc, Mutex},
@@ -169,7 +170,13 @@ mod tests {
         let on_complete: WorkerCallback = Arc::new(Mutex::new(c));
         let active_counter = Arc::new(AtomicUsize::new(1));
         let pending_tasks = Arc::new(AtomicUsize::new(1));
-        let _worker = Worker::new(id, receiver, on_complete, active_counter.clone(), pending_tasks);
+        let _worker = Worker::new(
+            id,
+            receiver,
+            on_complete,
+            active_counter.clone(),
+            pending_tasks,
+        );
         let (test_sender, test_receiver) = mpsc::channel();
         let task = Task::new(
             Box::new(move || {
@@ -201,7 +208,7 @@ mod tests {
     }
 
     #[test]
-    fn invokes_callack_on_panic()-> Result<(),String> {
+    fn invokes_callack_on_panic() -> Result<(), String> {
         let id = 1;
         let (sender, receiver): (Sender<Task>, Receiver<Task>) = mpsc::channel();
         let receiver: Arc<Mutex<Receiver<Task>>> = Arc::new(Mutex::new(receiver));
@@ -218,7 +225,13 @@ mod tests {
         let on_complete: WorkerCallback = Arc::new(Mutex::new(c));
         let active_counter = Arc::new(AtomicUsize::new(1));
         let pending_tasks = Arc::new(AtomicUsize::new(1));
-        let _worker = Worker::new(id, receiver, on_complete, active_counter.clone(), pending_tasks);
+        let _worker = Worker::new(
+            id,
+            receiver,
+            on_complete,
+            active_counter.clone(),
+            pending_tasks,
+        );
         let task = Task::new(
             Box::new(move || {
                 thread::sleep(Duration::from_millis(100));
