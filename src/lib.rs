@@ -18,7 +18,6 @@
 //! thread_pool.await_shutdown(); // This will block until all the workers are closed.
 //! ```
 //!
-#[macro_use]
 extern crate timed;
 
 /// Used to guard println statements, this lets you add as many print statements as needed and provides 

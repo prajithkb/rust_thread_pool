@@ -8,6 +8,7 @@ use std::{
     sync::{mpsc, Mutex},
     thread,
 };
+use timed::timed_macro::timed_block;
 /// A type that represents a  Callback whe the Worker Thread completes
 /// Typically used to detect panic
 pub(crate) type WorkerCallback =
@@ -67,7 +68,7 @@ impl Worker {
         active_counter: Arc<AtomicUsize>,
         pending_tasks: Arc<AtomicUsize>,
     ) -> Worker {
-        timed!("Worker.new");
+        timed_block!("Worker.new");
         guarded_println!("Creating a new worker with id {}", id);
         let receiver_inside = receiver.clone();
         let thread = thread::Builder::new()
@@ -80,7 +81,7 @@ impl Worker {
                     on_thread_complete: on_complete,
                     active_counter: active_counter.clone(),
                 };
-                timed!("Thread.run");
+                timed_block!("Thread.run");
                 run(id, receiver_inside, active_counter, pending_tasks)();
             })
             .unwrap();
@@ -109,7 +110,7 @@ fn run(
     active_counter: Arc<AtomicUsize>,
     pending_tasks: Arc<AtomicUsize>,
 ) -> Runnable {
-    timed!("Worker.run");
+    timed_block!("Worker.run");
     let receiver_inside = receiver.clone();
     let counter = active_counter.clone();
     let p = pending_tasks.clone();

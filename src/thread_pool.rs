@@ -10,6 +10,7 @@ use std::{
     sync::Arc,
     sync::{mpsc, Mutex},
 };
+use timed::timed_macro::timed_block;
 /// Defines the error states returned by `thread_pool.execute`
 #[derive(Debug, PartialEq)]
 pub enum ExecutionError {
@@ -50,7 +51,7 @@ impl ThreadPool {
     /// ```
     /// [Runnable]: ./ThreadPool.html#type.Runnable  
     pub fn new(maximum_number_of_threads: usize) -> ThreadPool {
-        timed!("ThreadPool.new");
+        timed_block!("ThreadPool.new");
         assert!(maximum_number_of_threads > 0 && maximum_number_of_threads < 50);
         let number_active_workers = Arc::new(AtomicUsize::new(0));
         let pending_tasks = Arc::new(AtomicUsize::new(0));
@@ -159,8 +160,7 @@ impl ThreadPool {
     /// Returns the status of execution. At present it fails fast if no threads are available to perform.thread_pool
     /// TODO: add a method to accept the task and keep it in a queue.
     pub fn execute(&self, task: Task, fail_fast: bool) -> Result<(), ExecutionError> {
-        let name = format!("ThreadPool-{}.execute", task.id);
-        timed!(&name);
+        timed_block!("ThreadPool-execute");
         let sender_reference = self.sender.borrow();
         if sender_reference.is_none() {
             return Err(ExecutionError::Shutdown);
@@ -185,7 +185,7 @@ impl ThreadPool {
 
     /// Checks for deficit in the number of workers and adds new workers to cover the deficit
     fn check_and_recover_worker_deficit(&self) {
-        timed!("ThreadPool.check_and_recover_worker_deficit");
+        timed_block!("ThreadPool.check_and_recover_worker_deficit");
         let mut workers = self.workers.lock().unwrap();
         let mut deficit = self.maximum_number_of_threads - workers.len();
         if deficit > 0 {
