@@ -8,7 +8,7 @@ use std::{
     sync::{mpsc, Mutex},
     thread,
 };
-use timed::timed_macro::timed_block;
+use timed::timed_block;
 /// A type that represents a  Callback whe the Worker Thread completes
 /// Typically used to detect panic
 pub(crate) type WorkerCallback =

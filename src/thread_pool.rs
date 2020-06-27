@@ -10,7 +10,7 @@ use std::{
     sync::Arc,
     sync::{mpsc, Mutex},
 };
-use timed::timed_macro::timed_block;
+use timed::timed_block;
 /// Defines the error states returned by `thread_pool.execute`
 #[derive(Debug, PartialEq)]
 pub enum ExecutionError {
